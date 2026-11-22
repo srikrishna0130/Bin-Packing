@@ -130,32 +130,38 @@ The catalogue is stored in [`app/data/boxes.json`](app/data/boxes.json) and load
 2. **First-Fit Decreasing Ordering:**
    - Sort packable packages in **descending order of volume and weight**.
    - Packing larger items first prevents awkward large items from being stranded at the end and forcing unnecessary additional boxes.
-3. **Active Box Life Cycle (Progressive Upgrade):**
+3. **Active Box Life Cycle (Progressive Upgrade with 3D Spatial Feasibility):**
    - For the first item, open the smallest box type capable of holding it.
    - For each subsequent item:
-     - **Fit in current box:** If it satisfies remaining volume, weight, and dimensional constraints, add it to the active box.
-     - **Upgrade / Swap:** If the current box is full, test whether **all items in the active box plus the new item** can fit together into a larger box type (e.g. swap B $\rightarrow$ A, or B/A $\rightarrow$ C).
-     - **Finalize:** If even the largest box (Box C) cannot hold them all together, seal the current active box, commit it to `boxes`, and start a fresh active box starting from the smallest box that fits the new item.
+     - **3D Collision & Limit Check:** Using the Extreme Points / Corner placement heuristic, check if the item can physically coexist inside the box without 3D spatial overlap with existing items, and within weight and volume limits.
+     - **Upgrade / Swap:** If the current box cannot fit or physically collides with the new item, test whether **all items in the active box plus the new item** can fit together into a larger box type without collisions (e.g. swap B $\rightarrow$ A, or B/A $\rightarrow$ C).
+     - **Finalize:** If even the largest box (Box C) cannot hold them all together without collisions or exceeding capacity, seal the current active box, commit it to `boxes`, and start a fresh active box starting from the smallest box that fits the new item.
 
 ---
 
-## 5. How Unit Testing Works for a Heuristic
+## 5. How Unit Testing Works: Invariants & Failure Cases
 
 Since minimal bin packing is a heuristic rather than a provably unique mathematical optimum, **how do we unit test it?**
 
-Rather than asserting arbitrary magic box numbers, unit testing verifies **physical and logical invariants**:
+Rather than asserting arbitrary magic box numbers, unit testing verifies **physical, spatial, and logical invariants**:
 
 1. **Item Conservation:** Every packable input package ID must appear in **exactly one** returned box. No packages lost, none duplicated.
 2. **Unpackable Isolation:** Unpackable package IDs appear strictly in `unpackable_packages` and never in any packed box.
 3. **Weight Feasibility:** For every packed box, $\sum \text{weight} \le \text{box.max\_weight}$.
 4. **Volume Feasibility:** For every packed box, $\sum \text{volume} \le \text{box.volume}$.
 5. **Rotational 3D Dimension Feasibility:** For every package inside a box, its sorted 3D dimensions $(d_1 \le d_2 \le d_3) \le (b_1 \le b_2 \le b_3)$ of the assigned box.
-6. **Box Count Integrity:** `total_boxes == len(boxes)`.
-7. **Deterministic Heuristic Scenarios:**
-   - Small items select Box B.
-   - Wide items ($120\times 120\times 120$) select Box A (too wide for B).
-   - Progressive upgrade swaps Box B to Box A when a third item overflows B.
-   - Partial packing test cases where oversized items are segregated alongside valid boxes.
+6. **3D Spatial Non-Collision:** Every box is verified through `can_pack_geometrically_3d` to confirm that items do not intersect or protrude in 3D space.
+7. **Box Count Integrity:** `total_boxes == len(boxes)`.
+
+### Tested Failure & Error Cases:
+- **Spatial Collision Forces Upgrade:** Two $110\times 110\times 110$ cubes have a combined volume under Box A's limit, but physically collide in Box A ($110+110=220 > 150$). The packer catches this collision and upgrades to Box C.
+- **Spatial Collision in Largest Box Forces Multiple Boxes:** Two $250\times 250\times 250$ cubes have a combined volume under Box C's limit, but collide in Box C ($250+250=500 > 400$). The packer catches this failure and splits them into 2 separate Box C boxes.
+- **Incompatible Dimensions on Upgrade:** Package 1 fits only in Box B ($190\times 90\times 90$), Package 2 fits only in Box A ($140\times 140\times 140$). Upgrading to Box A fails because P1 exceeds A; upgrading to Box B fails because P2 exceeds B. The packer detects this and upgrades to Box C.
+- **Negative & Zero Dimensions / Weights:** Rejected with `422 Unprocessable Entity`.
+- **Missing Required Fields & Non-Numeric Types:** Rejected with `422 Unprocessable Entity`.
+- **Empty List `[]`:** Rejected with `422 Unprocessable Entity`.
+- **Duplicate IDs:** Rejected with `400 Bad Request`.
+- **Exceeding Batch Limit (> 500 items):** Rejected with `422 Unprocessable Entity`.
 
 ---
 
