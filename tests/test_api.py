@@ -176,3 +176,23 @@ def test_api_partial_packing_200_with_unpackable():
     assert data["boxes"][0]["package_ids"] == [1]
     assert len(data["unpackable_packages"]) == 1
     assert data["unpackable_packages"][0]["id"] == 2
+
+
+def test_api_combined_packages_exceed_box_dimensions_despite_valid_volume():
+    """
+    Two packages of 250 x 250 x 250:
+    Combined volume (31.25M) < Box C volume (36M).
+    Combined weight (200) < Box C weight (3000).
+    Each fits in Box C individually (250 <= 300, 250 <= 400).
+    Combined: 250 + 250 = 500 > 400, cannot coexist in Box C.
+    The API must return 2 boxes.
+    """
+    payload = [
+        {"id": 1, "width": 250.0, "height": 250.0, "length": 250.0, "weight": 50.0},
+        {"id": 2, "width": 250.0, "height": 250.0, "length": 250.0, "weight": 50.0},
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_boxes"] == 2
+    assert len(data["boxes"]) == 2

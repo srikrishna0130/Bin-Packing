@@ -271,3 +271,56 @@ def test_multiple_boxes_required_due_to_weight(packer_service, default_catalogue
     verify_packing_invariants(response, packages, default_catalogue)
 
     assert response.total_boxes == 2
+
+
+def test_combined_packages_fit_volume_and_weight_and_individual_dims_but_fail_spatially():
+    """
+    CRITICAL EDGE CASE (Explicitly requested verification):
+    Given a single box type of size 150 x 150 x 150 (max_weight = 1000):
+    Package 1: 110 x 110 x 110, weight 10 (Volume = 1,331,000)
+    Package 2: 110 x 110 x 110, weight 10 (Volume = 1,331,000)
+
+    Verification:
+    1. sum(volume) = 2,662,000 <= 3,375,000 (Box volume) -> PASSES volume limit
+    2. sum(weight) = 20 <= 1000 (Box weight capacity) -> PASSES weight limit
+    3. P1 dimensions <= Box dimensions (110 <= 150) -> PASSES individual dimension limit
+    4. P2 dimensions <= Box dimensions (110 <= 150) -> PASSES individual dimension limit
+    5. BUT COMBINED: 110 + 110 = 220 > 150 along every axis!
+       They CANNOT physically fit together in this box.
+
+    Expectation:
+    When this is the only box type available, the algorithm MUST NOT put them in 1 box.
+    It must split them into 2 separate boxes of this type.
+    """
+    single_box_catalogue = [
+        BoxDefinition(type="A", width=150.0, height=150.0, length=150.0, max_weight=1000.0)
+    ]
+    packer = BinPackerService(single_box_catalogue)
+    packages = [
+        PackageInput(id="cube_1", width=110.0, height=110.0, length=110.0, weight=10.0),
+        PackageInput(id="cube_2", width=110.0, height=110.0, length=110.0, weight=10.0),
+    ]
+
+    # Pre-condition assertions proving the exact premise of the question:
+    box = single_box_catalogue[0]
+    total_vol = sum(p.volume for p in packages)
+    total_w = sum(p.weight for p in packages)
+    assert total_vol <= box.volume, f"Total volume {total_vol} exceeds {box.volume}"
+    assert total_w <= box.max_weight, f"Total weight {total_w} exceeds {box.max_weight}"
+    for p in packages:
+        assert box.can_accommodate_dimensions(p.sorted_dimensions), f"{p.id} exceeds single dimensions"
+
+    # Verify that 3D spatial check REJECTS putting them together in this box:
+    assert not can_pack_geometrically_3d(box, packages), "Should be physically impossible to pack together"
+
+    # Run the packer:
+    response = packer.pack(packages)
+    verify_packing_invariants(response, packages, single_box_catalogue)
+
+    # Must require 2 boxes, NOT 1:
+    assert response.total_boxes == 2
+    assert len(response.boxes) == 2
+    assert response.boxes[0].box_type == "A"
+    assert response.boxes[1].box_type == "A"
+    assert response.boxes[0].package_ids == ["cube_1"]
+    assert response.boxes[1].package_ids == ["cube_2"]
