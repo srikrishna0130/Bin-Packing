@@ -2,7 +2,7 @@ import pytest
 from typing import List, Dict
 from app.models.box import BoxDefinition
 from app.models.package import PackageInput, PackingResponse
-from app.services.packer import BinPackerService
+from app.services.packer import BinPackerService, can_pack_geometrically_3d
 
 
 @pytest.fixture
@@ -27,8 +27,13 @@ def verify_packing_invariants(
 ):
     """
     Core verification helper for bin packing:
-    Regardless of whether an optimal or heuristic packing is used,
-    the output must strictly satisfy these physical and logical invariants.
+    Strictly verifies physical and logical invariants regardless of heuristic:
+    1. Count consistency
+    2. Item conservation (no dropped, no duplicated items)
+    3. Weight capacity
+    4. Volume capacity
+    5. Single-item rotational fit
+    6. Multi-item 3D spatial collision-free coexistence
     """
     catalogue_map: Dict[str, BoxDefinition] = {b.type: b for b in catalogue}
     input_pkg_map = {p.id: p for p in input_packages}
@@ -39,7 +44,6 @@ def verify_packing_invariants(
     )
 
     # Invariant 2: Item conservation
-    # Every input package must be either in a packed box or in unpackable_packages
     packed_ids = []
     for box in response.boxes:
         packed_ids.extend(box.package_ids)
@@ -82,8 +86,13 @@ def verify_packing_invariants(
         # Individual package dimensions must fit inside the box (with 3D rotation)
         for p in box_packages:
             assert box_def.can_accommodate_dimensions(p.sorted_dimensions), (
-                f"Package {p.id} with dimensions {p.sorted_dimensions} does not physically fit in box {box.box_type} {box_def.sorted_dimensions}"
+                f"Package {p.id} with dimensions {p.sorted_dimensions} does not fit in box {box.box_type}"
             )
+
+        # Invariant 4: True 3D spatial feasibility (no physical collisions)
+        assert can_pack_geometrically_3d(box_def, box_packages), (
+            f"Box {box.box_type} contains packages that physically collide in 3D space!"
+        )
 
 
 def test_assignment_sample(packer_service, default_catalogue):
@@ -95,7 +104,6 @@ def test_assignment_sample(packer_service, default_catalogue):
     response = packer_service.pack(packages)
     verify_packing_invariants(response, packages, default_catalogue)
 
-    # Both items are tiny and should fit in a single Box B (smallest by volume)
     assert response.total_boxes == 1
     assert response.boxes[0].box_type == "B"
     assert set(response.boxes[0].package_ids) == {123, 125}
@@ -107,7 +115,6 @@ def test_box_selection_by_dimension_fit(packer_service, default_catalogue):
     Package dimensions: 120 x 120 x 120.
     Box B is 100 x 200 x 100 -> item cannot fit in Box B (120 > 100).
     Box A is 150 x 150 x 150 -> item fits in Box A.
-    Verifies that the packer selects Box A even though Box B is smaller in volume.
     """
     packages = [
         PackageInput(id=1, width=120.0, height=120.0, length=120.0, weight=50.0),
@@ -122,20 +129,15 @@ def test_box_selection_by_dimension_fit(packer_service, default_catalogue):
 
 def test_progressive_upgrade_swaps_to_larger_box(packer_service, default_catalogue):
     """
-    Test progressive upgrade:
-    Items 1 and 2 fit into Box B.
-    Adding item 3 exceeds Box B (e.g. combined volume or weight),
-    but all three fit comfortably into Box A.
-    The packer should upgrade to Box A instead of shipping two separate boxes.
+    Items 1 and 2 fit into Box B (70x70x70 fits along the 200 height: 70+70=140 <= 200).
+    Adding item 3 overflows Box B (needs 3x70=210 > 200),
+    but all three fit comfortably into Box A (which holds a 2x2 grid: 140x140 <= 150x150).
+    The packer should upgrade to Box A instead of opening multiple boxes.
     """
-    # Box B volume: 2,000,000. Box A volume: 3,375,000.
-    # Package volume: 900,000 each (e.g. 90 x 100 x 100).
-    # Two packages: 1,800,000 <= 2,000,000 (fits in B).
-    # Three packages: 2,700,000 > 2,000,000 (exceeds B, but fits in A's 3,375,000).
     packages = [
-        PackageInput(id="p1", width=90.0, height=100.0, length=100.0, weight=10.0),
-        PackageInput(id="p2", width=90.0, height=100.0, length=100.0, weight=10.0),
-        PackageInput(id="p3", width=90.0, height=100.0, length=100.0, weight=10.0),
+        PackageInput(id="p1", width=70.0, height=70.0, length=70.0, weight=10.0),
+        PackageInput(id="p2", width=70.0, height=70.0, length=70.0, weight=10.0),
+        PackageInput(id="p3", width=70.0, height=70.0, length=70.0, weight=10.0),
     ]
     response = packer_service.pack(packages)
     verify_packing_invariants(response, packages, default_catalogue)
@@ -145,13 +147,90 @@ def test_progressive_upgrade_swaps_to_larger_box(packer_service, default_catalog
     assert set(response.boxes[0].package_ids) == {"p1", "p2", "p3"}
 
 
+def test_geometric_collision_failure_forces_box_upgrade(packer_service, default_catalogue):
+    """
+    FAILURE CASE:
+    Two cubes of size 110 x 110 x 110:
+    - Total volume: 2,662,000 <= 3,375,000 (Box A volume).
+    - Total weight: 20 <= 1000.
+    - Each cube individually fits in Box A (110 <= 150).
+    - BUT two 110-wide cubes CANNOT fit inside Box A (150x150x150) because 110 + 110 = 220 > 150!
+    The packer must detect this spatial failure in Box A and upgrade to Box C (300x400x300)
+    where they physically fit side-by-side.
+    """
+    box_a = next(b for b in default_catalogue if b.type == "A")
+    packages = [
+        PackageInput(id="cube_1", width=110.0, height=110.0, length=110.0, weight=10.0),
+        PackageInput(id="cube_2", width=110.0, height=110.0, length=110.0, weight=10.0),
+    ]
+
+    # Directly verify that Box A physically rejects the collision
+    assert not can_pack_geometrically_3d(box_a, packages)
+
+    response = packer_service.pack(packages)
+    verify_packing_invariants(response, packages, default_catalogue)
+
+    # Must NOT pack them into Box A; must be upgraded to Box C
+    assert response.total_boxes == 1
+    assert response.boxes[0].box_type == "C"
+    assert set(response.boxes[0].package_ids) == {"cube_1", "cube_2"}
+
+
+def test_geometric_collision_in_largest_box_forces_multiple_boxes(packer_service, default_catalogue):
+    """
+    FAILURE CASE:
+    Two cubes of size 250 x 250 x 250:
+    - Total volume: 31,250,000 <= 36,000,000 (Box C volume).
+    - Total weight: 200 <= 3000.
+    - Each cube individually fits in Box C (300 x 400 x 300).
+    - BUT 250 + 250 = 500 > 400 (exceeds all dimensions of Box C).
+    They cannot coexist in the largest box. The service must catch this failure
+    and split them into 2 separate Box C boxes rather than erroneously putting them in 1 box.
+    """
+    box_c = next(b for b in default_catalogue if b.type == "C")
+    packages = [
+        PackageInput(id="big_cube_1", width=250.0, height=250.0, length=250.0, weight=100.0),
+        PackageInput(id="big_cube_2", width=250.0, height=250.0, length=250.0, weight=100.0),
+    ]
+
+    # Directly verify that Box C rejects two 250 cubes
+    assert not can_pack_geometrically_3d(box_c, packages)
+
+    response = packer_service.pack(packages)
+    verify_packing_invariants(response, packages, default_catalogue)
+
+    # Must be split into 2 separate boxes
+    assert response.total_boxes == 2
+    assert len(response.boxes) == 2
+    for b in response.boxes:
+        assert b.box_type == "C"
+        assert len(b.package_ids) == 1
+
+
+def test_incompatible_dimensions_during_box_upgrade(packer_service, default_catalogue):
+    """
+    FAILURE CASE:
+    - Package 1 (190 x 90 x 90) fits in Box B (height 200), but cannot fit in Box A (max dim 150).
+    - Package 2 (140 x 140 x 140) fits in Box A, but cannot fit in Box B (width 100).
+    When trying to pack both:
+    - Box B cannot hold Package 2.
+    - Box A cannot hold Package 1.
+    The packer must recognize that upgrading from B to A fails, and must jump to Box C.
+    """
+    packages = [
+        PackageInput(id="long_item", width=190.0, height=90.0, length=90.0, weight=20.0),
+        PackageInput(id="wide_item", width=140.0, height=140.0, length=140.0, weight=20.0),
+    ]
+    response = packer_service.pack(packages)
+    verify_packing_invariants(response, packages, default_catalogue)
+
+    assert response.total_boxes == 1
+    assert response.boxes[0].box_type == "C"
+    assert set(response.boxes[0].package_ids) == {"long_item", "wide_item"}
+
+
 def test_partial_packing_with_unpackable_item(packer_service, default_catalogue):
-    """
-    Test the partial shipment requirement:
-    One item is packable, and one item is unpackable (exceeds Box C capacity).
-    The service must pack the valid item into a box and return the unpackable
-    item in `unpackable_packages` (partial 200 approach).
-    """
+    """One valid item, two unpackable items (one oversized, one overweight)."""
     packages = [
         PackageInput(id="valid_1", width=20.0, height=20.0, length=20.0, weight=10.0),
         PackageInput(id="oversized_2", width=500.0, height=500.0, length=500.0, weight=10.0),
@@ -169,7 +248,7 @@ def test_partial_packing_with_unpackable_item(packer_service, default_catalogue)
 
 
 def test_all_items_unpackable(packer_service, default_catalogue):
-    """If all items are unpackable, return 0 boxes and all items in unpackable_packages."""
+    """When all items are unpackable, return 0 boxes and list all unpackable items."""
     packages = [
         PackageInput(id="huge_1", width=600.0, height=600.0, length=600.0, weight=50.0),
         PackageInput(id="heavy_2", width=50.0, height=50.0, length=50.0, weight=5000.0),
@@ -182,18 +261,13 @@ def test_all_items_unpackable(packer_service, default_catalogue):
     assert len(response.unpackable_packages) == 2
 
 
-def test_multiple_boxes_required(packer_service, default_catalogue):
-    """
-    When packages together exceed the largest box (Box C),
-    multiple boxes must be opened.
-    """
-    # Box C max weight: 3000.
-    # 4 packages each weighing 1200 -> total 4800 weight -> cannot fit in 1 Box C.
+def test_multiple_boxes_required_due_to_weight(packer_service, default_catalogue):
+    """When packages exceed Box C max weight (3000), multiple boxes must be used."""
     packages = [
-        PackageInput(id=f"item_{i}", width=100.0, height=100.0, length=100.0, weight=1200.0)
+        PackageInput(id=f"item_{i}", width=50.0, height=50.0, length=50.0, weight=1200.0)
         for i in range(4)
     ]
     response = packer_service.pack(packages)
     verify_packing_invariants(response, packages, default_catalogue)
 
-    assert response.total_boxes > 1
+    assert response.total_boxes == 2

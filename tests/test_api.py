@@ -30,6 +30,10 @@ def test_api_pack_success():
     assert data["unpackable_packages"] == []
 
 
+# ============================================================================
+# API Validation & Error Cases
+# ============================================================================
+
 def test_api_empty_list_returns_validation_error():
     """Empty list [] must be rejected with 422 Unprocessable Entity."""
     response = client.post("/pack", json=[])
@@ -39,13 +43,14 @@ def test_api_empty_list_returns_validation_error():
     assert any("at least 1" in str(err) for err in data.get("errors", []))
 
 
-def test_api_invalid_dimensions():
+def test_api_negative_dimensions():
     """Negative dimensions must fail validation with 422."""
     payload = [
         {"id": 1, "width": -10.0, "height": 10.0, "length": 10.0, "weight": 5.0}
     ]
     response = client.post("/pack", json=payload)
     assert response.status_code == 422
+    assert "greater than 0" in str(response.json())
 
 
 def test_api_zero_dimensions():
@@ -55,6 +60,82 @@ def test_api_zero_dimensions():
     ]
     response = client.post("/pack", json=payload)
     assert response.status_code == 422
+    assert "greater than 0" in str(response.json())
+
+
+def test_api_negative_weight():
+    """Negative weight must fail validation with 422."""
+    payload = [
+        {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": -5.0}
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+    assert "greater than 0" in str(response.json())
+
+
+def test_api_zero_weight():
+    """Zero weight must fail validation with 422."""
+    payload = [
+        {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 0.0}
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+    assert "greater than 0" in str(response.json())
+
+
+def test_api_missing_required_fields():
+    """Payloads missing required fields (e.g. height, weight) must fail with 422."""
+    payload = [
+        {"id": 1, "width": 10.0, "length": 10.0}  # missing height and weight
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+    assert "Field required" in str(response.json())
+
+
+def test_api_invalid_data_types():
+    """Non-numeric dimension values must fail validation with 422."""
+    payload = [
+        {"id": 1, "width": "not-a-number", "height": 10.0, "length": 10.0, "weight": 5.0}
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+
+
+def test_api_null_values():
+    """Null values for dimensions must fail validation with 422."""
+    payload = [
+        {"id": 1, "width": None, "height": 10.0, "length": 10.0, "weight": 5.0}
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+
+
+def test_api_non_list_payload():
+    """Passing a single JSON object instead of an array of packages must fail with 422."""
+    payload = {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0}
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+
+
+def test_api_excessive_dimensions():
+    """Dimensions exceeding the sanity bound (> 10,000) must fail with 422."""
+    payload = [
+        {"id": 1, "width": 50000.0, "height": 10.0, "length": 10.0, "weight": 5.0}
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+    assert "less than or equal to 10000" in str(response.json())
+
+
+def test_api_excessive_weight():
+    """Weight exceeding the sanity bound (> 100,000) must fail with 422."""
+    payload = [
+        {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 500000.0}
+    ]
+    response = client.post("/pack", json=payload)
+    assert response.status_code == 422
+    assert "less than or equal to 100000" in str(response.json())
 
 
 def test_api_duplicate_ids():
@@ -66,6 +147,16 @@ def test_api_duplicate_ids():
     response = client.post("/pack", json=payload)
     assert response.status_code == 400
     assert "Duplicate package IDs found" in response.json()["detail"]
+
+
+def test_api_max_batch_limit():
+    """Exceeding MAX_PACKAGES_PER_REQUEST must fail validation with 422."""
+    excessive_items = [
+        {"id": i, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0}
+        for i in range(MAX_PACKAGES_PER_REQUEST + 1)
+    ]
+    response = client.post("/pack", json=excessive_items)
+    assert response.status_code == 422
 
 
 def test_api_partial_packing_200_with_unpackable():
@@ -85,13 +176,3 @@ def test_api_partial_packing_200_with_unpackable():
     assert data["boxes"][0]["package_ids"] == [1]
     assert len(data["unpackable_packages"]) == 1
     assert data["unpackable_packages"][0]["id"] == 2
-
-
-def test_api_max_batch_limit():
-    """Exceeding MAX_PACKAGES_PER_REQUEST must fail validation with 422."""
-    excessive_items = [
-        {"id": i, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0}
-        for i in range(MAX_PACKAGES_PER_REQUEST + 1)
-    ]
-    response = client.post("/pack", json=excessive_items)
-    assert response.status_code == 422
