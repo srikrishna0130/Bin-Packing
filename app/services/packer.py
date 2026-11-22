@@ -1,74 +1,6 @@
-from typing import List, Optional, Tuple, Set, NamedTuple
+from typing import List, Optional, Tuple
 from app.models.box import BoxDefinition
 from app.models.package import PackageInput, PackedBox, UnpackablePackage, PackingResponse
-
-
-class PlacedItem(NamedTuple):
-    x: float
-    y: float
-    z: float
-    width: float
-    height: float
-    length: float
-
-
-def aabb_overlaps(a: PlacedItem, b: PlacedItem) -> bool:
-    """Return True if two placed items overlap in 3D space (AABB collision)."""
-    return not (
-        a.x + a.width <= b.x or b.x + b.width <= a.x or
-        a.y + a.height <= b.y or b.y + b.height <= a.y or
-        a.z + a.length <= b.z or b.z + b.length <= a.z
-    )
-
-
-def get_rotations_3d(w: float, h: float, l: float) -> Set[Tuple[float, float, float]]:
-    """Return unique 3D orthogonal rotational permutations."""
-    return set([
-        (w, h, l), (w, l, h),
-        (h, w, l), (h, l, w),
-        (l, w, h), (l, h, w)
-    ])
-
-
-def can_pack_geometrically_3d(box_def: BoxDefinition, items: List[PackageInput]) -> bool:
-    """
-    Check if items can physically coexist within box_def boundaries without 3D spatial overlap,
-    using the Extreme Points / Corner placement heuristic.
-    """
-    if len(items) <= 1:
-        return True
-
-    box_w, box_h, box_l = box_def.width, box_def.height, box_def.length
-    placed: List[PlacedItem] = []
-
-    for item in items:
-        candidate_points = {(0.0, 0.0, 0.0)}
-        for p in placed:
-            candidate_points.add((p.x + p.width, p.y, p.z))
-            candidate_points.add((p.x, p.y + p.height, p.z))
-            candidate_points.add((p.x, p.y, p.z + p.length))
-
-        sorted_points = sorted(candidate_points, key=lambda pt: (pt[1], pt[0], pt[2]))
-        placed_this_item = False
-        rotations = get_rotations_3d(item.width, item.height, item.length)
-
-        for pt_x, pt_y, pt_z in sorted_points:
-            if placed_this_item:
-                break
-            for w, h, l in rotations:
-                if pt_x + w > box_w or pt_y + h > box_h or pt_z + l > box_l:
-                    continue
-                candidate = PlacedItem(pt_x, pt_y, pt_z, w, h, l)
-                if any(aabb_overlaps(candidate, other) for other in placed):
-                    continue
-                placed.append(candidate)
-                placed_this_item = True
-                break
-
-        if not placed_this_item:
-            return False
-
-    return True
 
 
 class ActiveBox:
@@ -87,15 +19,12 @@ class ActiveBox:
         return sum(item.volume for item in self.items)
 
     def can_fit_item(self, item: PackageInput) -> bool:
-        """Check if an item can be added to the current box without exceeding limits or overlapping."""
+        """Check if an item can be added to the current box without exceeding limits (naive check)."""
         if self.total_weight + item.weight > self.box_def.max_weight:
             return False
         if self.total_volume + item.volume > self.box_def.volume:
             return False
         if not self.box_def.can_accommodate_dimensions(item.sorted_dimensions):
-            return False
-        # 3D spatial non-overlapping check
-        if not can_pack_geometrically_3d(self.box_def, self.items + [item]):
             return False
         return True
 
@@ -111,7 +40,7 @@ class ActiveBox:
 
 
 class BinPackerService:
-    """Bin packing service using a Progressive Upgrade heuristic with 3D spatial verification."""
+    """Bin packing service using the baseline Progressive Upgrade heuristic (naive volume/weight check)."""
 
     def __init__(self, boxes: List[BoxDefinition]):
         if not boxes:
@@ -120,7 +49,7 @@ class BinPackerService:
         self.boxes = sorted(boxes, key=lambda b: (b.volume, b.max_weight))
 
     def _can_box_hold_all(self, box_def: BoxDefinition, items: List[PackageInput]) -> bool:
-        """Check if all items together satisfy a box definition's weight, volume, and 3D geometry."""
+        """Check if all items together satisfy a box definition's weight, volume, and dimensions."""
         total_weight = sum(item.weight for item in items)
         if total_weight > box_def.max_weight:
             return False
@@ -130,9 +59,6 @@ class BinPackerService:
         for item in items:
             if not box_def.can_accommodate_dimensions(item.sorted_dimensions):
                 return False
-        # 3D spatial non-overlapping check
-        if not can_pack_geometrically_3d(box_def, items):
-            return False
         return True
 
     def _find_smallest_box_for_item(self, item: PackageInput) -> Optional[BoxDefinition]:
@@ -151,8 +77,8 @@ class BinPackerService:
         1. Identifies and segregates any unpackable packages (exceeding all available boxes).
         2. Sorts packable packages descending by volume to maximize packing density.
         3. Fills an active box:
-           - Tries to fit the next item into the current box (weight, volume, and 3D geometry).
-           - If full or colliding, attempts to swap/upgrade the active box to a larger box type.
+           - Tries to fit the next item into the current box.
+           - If full, attempts to swap/upgrade the active box to a larger box type.
            - If even the largest box cannot fit the items together, finalizes the active box
              and opens a new box (starting with the smallest possible size for the new item).
         4. Returns the total boxes, the package IDs in each box, and any unpackable packages.
@@ -198,11 +124,11 @@ class BinPackerService:
                 active_box.items.append(pkg)
                 continue
 
-            # Try to fit in current active box (respecting weight, volume, and 3D geometry)
+            # Try to fit in current active box
             if active_box.can_fit_item(pkg):
                 active_box.items.append(pkg)
             else:
-                # Active box cannot hold item. Try upgrading to a larger box!
+                # Active box is full with current item. Try upgrading to a larger box!
                 candidate_items = active_box.items + [pkg]
                 upgraded = False
 

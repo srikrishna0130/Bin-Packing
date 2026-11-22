@@ -1,8 +1,61 @@
 import pytest
-from typing import List, Dict
+from typing import List, Dict, Set, Tuple, NamedTuple
 from app.models.box import BoxDefinition
 from app.models.package import PackageInput, PackingResponse
-from app.services.packer import BinPackerService, can_pack_geometrically_3d
+from app.services.packer import BinPackerService
+
+
+class PlacedItem(NamedTuple):
+    x: float
+    y: float
+    z: float
+    width: float
+    height: float
+    length: float
+
+
+def aabb_overlaps(a: PlacedItem, b: PlacedItem) -> bool:
+    return not (
+        a.x + a.width <= b.x or b.x + b.width <= a.x or
+        a.y + a.height <= b.y or b.y + b.height <= a.y or
+        a.z + a.length <= b.z or b.z + b.length <= a.z
+    )
+
+
+def can_pack_geometrically_3d(box_def: BoxDefinition, items: List[PackageInput]) -> bool:
+    """Test verification utility: independently verifies if items can physically coexist in 3D."""
+    if len(items) <= 1:
+        return True
+    box_w, box_h, box_l = box_def.width, box_def.height, box_def.length
+    placed: List[PlacedItem] = []
+    for item in items:
+        candidate_points = {(0.0, 0.0, 0.0)}
+        for p in placed:
+            candidate_points.add((p.x + p.width, p.y, p.z))
+            candidate_points.add((p.x, p.y + p.height, p.z))
+            candidate_points.add((p.x, p.y, p.z + p.length))
+        sorted_points = sorted(candidate_points, key=lambda pt: (pt[1], pt[0], pt[2]))
+        placed_this_item = False
+        rotations = set([
+            (item.width, item.height, item.length), (item.width, item.length, item.height),
+            (item.height, item.width, item.length), (item.height, item.length, item.width),
+            (item.length, item.width, item.height), (item.length, item.height, item.width),
+        ])
+        for pt_x, pt_y, pt_z in sorted_points:
+            if placed_this_item:
+                break
+            for w, h, l in rotations:
+                if pt_x + w > box_w or pt_y + h > box_h or pt_z + l > box_l:
+                    continue
+                cand = PlacedItem(pt_x, pt_y, pt_z, w, h, l)
+                if any(aabb_overlaps(cand, other) for other in placed):
+                    continue
+                placed.append(cand)
+                placed_this_item = True
+                break
+        if not placed_this_item:
+            return False
+    return True
 
 
 @pytest.fixture
