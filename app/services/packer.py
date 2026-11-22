@@ -60,7 +60,7 @@ class BinPackerService:
     ) -> PackingResponse:
         """
         Packs the given packages into shipping boxes using the Progressive Upgrade heuristic
-        driven by the selected packing strategy (Method A: Bounding Box or Method C: Volumetric Derating).
+        driven by the selected packing strategy (Method A: Bounding Box or Method C: Volume Buffer).
         """
         active_strategy: PackingStrategy
         if strategy is None:

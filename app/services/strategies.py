@@ -8,7 +8,7 @@ from app.models.package import PackageInput
 class StrategyType(str, Enum):
     """Available bin-packing fitting strategies."""
     BOUNDING_BOX = "bounding_box"
-    VOLUMETRIC_DERATING = "volumetric_derating"
+    VOLUME_BUFFER = "volume_buffer"
 
 
 class PackingStrategy(ABC):
@@ -113,23 +113,23 @@ class BoundingBoxStrategy(PackingStrategy):
         return True
 
 
-class VolumetricDeratingStrategy(PackingStrategy):
+class VolumeBufferStrategy(PackingStrategy):
     """
-    Method C: Volumetric Derating / Fill Factor Strategy.
+    Method C: Volume Buffer Strategy.
     - Sorts packages descending by volume (First-Fit Decreasing).
     - Checks weight capacity and individual dimensions.
-    - Limits volume to 100% (1.0) for a single item, and derates to 65% (0.65)
-      for multiple items to account for realistic packing void ratios.
+    - Allows 100% (1.0) volume for a single item, and leaves a 35% buffer (caps volume
+      at 65% / 0.65) for multiple items to account for realistic packaging gaps.
     """
 
-    def __init__(self, multi_item_derating_factor: float = 0.65):
-        if not (0.0 < multi_item_derating_factor <= 1.0):
-            raise ValueError("Derating factor must be between 0.0 and 1.0")
-        self.multi_item_derating_factor = multi_item_derating_factor
+    def __init__(self, multi_item_buffer_factor: float = 0.65):
+        if not (0.0 < multi_item_buffer_factor <= 1.0):
+            raise ValueError("Buffer factor must be between 0.0 and 1.0")
+        self.multi_item_buffer_factor = multi_item_buffer_factor
 
     @property
     def name(self) -> str:
-        return StrategyType.VOLUMETRIC_DERATING.value
+        return StrategyType.VOLUME_BUFFER.value
 
     def sort_packages(self, packages: List[PackageInput]) -> List[PackageInput]:
         # Largest items first (First-Fit Decreasing heuristic)
@@ -149,9 +149,9 @@ class VolumetricDeratingStrategy(PackingStrategy):
             if not box_def.can_accommodate_dimensions(item.sorted_dimensions):
                 return False
 
-        # Volumetric derating check
+        # Volume buffer check
         total_volume = sum(item.volume for item in items)
-        allowed_factor = 1.0 if len(items) <= 1 else self.multi_item_derating_factor
+        allowed_factor = 1.0 if len(items) <= 1 else self.multi_item_buffer_factor
         if total_volume > box_def.volume * allowed_factor:
             return False
 
@@ -161,7 +161,7 @@ class VolumetricDeratingStrategy(PackingStrategy):
 # Strategy Registry
 STRATEGY_REGISTRY = {
     StrategyType.BOUNDING_BOX.value: BoundingBoxStrategy(),
-    StrategyType.VOLUMETRIC_DERATING.value: VolumetricDeratingStrategy(),
+    StrategyType.VOLUME_BUFFER.value: VolumeBufferStrategy(),
 }
 
 

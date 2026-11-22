@@ -210,12 +210,12 @@ def test_api_strategy_selection_bounding_box():
     assert response.json()["total_boxes"] == 1
 
 
-def test_api_strategy_selection_volumetric_derating():
-    """Explicitly selecting ?strategy=volumetric_derating works."""
+def test_api_strategy_selection_volume_buffer():
+    """Explicitly selecting ?strategy=volume_buffer works."""
     payload = [
         {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0},
     ]
-    response = client.post("/pack?strategy=volumetric_derating", json=payload)
+    response = client.post("/pack?strategy=volume_buffer", json=payload)
     assert response.status_code == 200
     assert response.json()["total_boxes"] == 1
 

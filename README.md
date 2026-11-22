@@ -43,7 +43,7 @@ Accepts a list of packages to pack into available shipping boxes.
 #### Strategy Selection (`?strategy=...`)
 The client can choose between two packing validation strategies via the `strategy` query parameter:
 * **`strategy=bounding_box` (Default - Method A):** Uses cumulative bounding box expansion $[W, H, L]$. Sorts packages in **ascending volume** (smallest first) so small items pack tightly without creating dead air.
-* **`strategy=volumetric_derating` (Method C):** Uses volumetric fill factor limits ($100\%$ for 1 item, $65\%$ for $\ge 2$ items). Sorts packages in **descending volume** (First-Fit Decreasing).
+* **`strategy=volume_buffer` (Method C):** Uses realistic packaging buffer limits ($100\%$ for 1 item, $65\%$ for $\ge 2$ items). Sorts packages in **descending volume** (First-Fit Decreasing).
 
 #### Sensible Limits & Guardrails
 - **Batch Size:** Minimum 1 item, maximum 500 items per request (protects against payload exhaustion).
@@ -136,11 +136,11 @@ We use the **Strategy Pattern** to separate packing validation into clean, inter
 * **Sorting:** Packages are sorted in **ascending order of volume** (smallest items first). This clusters small items tightly together and prevents premature inflation of bounding box dimensions.
 * **Fit Check:** Maintains a single enclosing bounding box $[W, H, L]$ by evaluating expansion along $X$, $Y$, and $Z$ across 3D rotations. If the minimal enclosing bounding box fits within the shipping box, the items fit.
 
-#### Method C: Volumetric Derating (`volumetric_derating`)
+#### Method C: Volume Buffer (`volume_buffer`)
 * **Sorting:** Packages are sorted in **descending order of volume** (First-Fit Decreasing).
-* **Fit Check:** Enforces realistic packaging fill factors:
+* **Fit Check:** Enforces realistic packaging buffer limits:
   * Single item ($N=1$): Allows up to **$100\%$** ($1.0$) of box volume.
-  * Multiple items ($N \ge 2$): Caps volume at **$65\%$** ($0.65$) to account for void space between mixed rectangular items.
+  * Multiple items ($N \ge 2$): Leaves a 35% buffer (caps volume at **$65\%$** / $0.65$) to account for void space between mixed rectangular items.
 
 ---
 
@@ -156,10 +156,10 @@ Since minimal bin packing is a heuristic rather than a provably unique mathemati
 6. **Box Count Integrity:** `total_boxes == len(boxes)`.
 
 ### Tested Failure & Edge Cases:
-- **Spatial Collision Forces Upgrade:** Two $110\times 110\times 110$ cubes have a combined volume under Box A's limit, but physically collide in Box A ($110+110=220 > 150$). Both `bounding_box` and `volumetric_derating` catch this and upgrade to Box C.
+- **Spatial Collision Forces Upgrade:** Two $110\times 110\times 110$ cubes have a combined volume under Box A's limit, but physically collide in Box A ($110+110=220 > 150$). Both `bounding_box` and `volume_buffer` catch this and upgrade to Box C.
 - **Spatial Collision in Largest Box Forces Multiple Boxes:** Two $250\times 250\times 250$ cubes have a combined volume under Box C's limit, but collide in Box C ($250+250=500 > 400$). The packer catches this failure and splits them into 2 separate Box C boxes.
 - **Incompatible Dimensions on Upgrade:** Package 1 fits only in Box B ($190\times 90\times 90$), Package 2 fits only in Box A ($140\times 140\times 140$). Upgrading to Box A fails because P1 exceeds A; upgrading to Box B fails because P2 exceeds B. The packer detects this and upgrades to Box C.
-- **Strategy Selection & Parameter Validation:** Explicit selection of `bounding_box` and `volumetric_derating` via query parameter, plus 422 error on invalid strategy names.
+- **Strategy Selection & Parameter Validation:** Explicit selection of `bounding_box` and `volume_buffer` via query parameter, plus 422 error on invalid strategy names.
 - **Negative & Zero Dimensions / Weights:** Rejected with `422 Unprocessable Entity`.
 - **Missing Required Fields & Non-Numeric Types:** Rejected with `422 Unprocessable Entity`.
 - **Empty List `[]`:** Rejected with `422 Unprocessable Entity`.

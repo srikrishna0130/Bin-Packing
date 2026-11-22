@@ -5,7 +5,7 @@ from app.models.package import PackageInput, PackingResponse
 from app.services.packer import BinPackerService
 from app.services.strategies import (
     BoundingBoxStrategy,
-    VolumetricDeratingStrategy,
+    VolumeBufferStrategy,
     StrategyType,
 )
 
@@ -330,12 +330,12 @@ def test_bounding_box_multiple_boxes_required_due_to_weight(packer_service, defa
 
 
 # ============================================================================
-# METHOD C: Volumetric Derating Strategy Tests
+# METHOD C: Volume Buffer Strategy Tests
 # ============================================================================
 
-def test_volumetric_derating_sorts_descending_by_volume():
-    """Verify that VolumetricDeratingStrategy orders packages largest-first (FFD)."""
-    strategy = VolumetricDeratingStrategy()
+def test_volume_buffer_sorts_descending_by_volume():
+    """Verify that VolumeBufferStrategy orders packages largest-first (FFD)."""
+    strategy = VolumeBufferStrategy()
     pkgs = [
         PackageInput(id="small", width=10.0, height=10.0, length=10.0, weight=1.0),
         PackageInput(id="big", width=50.0, height=50.0, length=50.0, weight=10.0),
@@ -345,28 +345,28 @@ def test_volumetric_derating_sorts_descending_by_volume():
     assert [p.id for p in sorted_pkgs] == ["big", "medium", "small"]
 
 
-def test_volumetric_derating_single_item_allows_100_percent():
+def test_volume_buffer_single_item_allows_100_percent():
     """A single item can use up to 100% of the box volume."""
-    strategy = VolumetricDeratingStrategy(multi_item_derating_factor=0.65)
+    strategy = VolumeBufferStrategy(multi_item_buffer_factor=0.65)
     box = BoxDefinition(type="A", width=150.0, height=150.0, length=150.0, max_weight=1000.0)
     # Single item with 90% volume of Box A
     item = PackageInput(id=1, width=145.0, height=145.0, length=145.0, weight=100.0)
     assert strategy.can_fit_items(box, [item])
 
 
-def test_volumetric_derating_multi_item_derates_to_65_percent(packer_service, default_catalogue):
+def test_volume_buffer_multi_item_derates_to_65_percent(packer_service, default_catalogue):
     """
     Two 110x110x110 cubes:
     Combined volume = 2.662M.
     Box A volume = 3.375M. At 65% limit: 3.375M * 0.65 = 2.193M.
-    Because 2.662M > 2.193M, VolumetricDeratingStrategy rejects Box A
+    Because 2.662M > 2.193M, VolumeBufferStrategy rejects Box A
     and upgrades to Box C (where 36M * 0.65 = 23.4M >= 2.662M).
     """
     packages = [
         PackageInput(id="c1", width=110.0, height=110.0, length=110.0, weight=10.0),
         PackageInput(id="c2", width=110.0, height=110.0, length=110.0, weight=10.0),
     ]
-    response = packer_service.pack(packages, strategy=StrategyType.VOLUMETRIC_DERATING.value)
+    response = packer_service.pack(packages, strategy=StrategyType.VOLUME_BUFFER.value)
     verify_packing_invariants(response, packages, default_catalogue, check_spatial=False)
 
     assert response.total_boxes == 1
@@ -374,7 +374,7 @@ def test_volumetric_derating_multi_item_derates_to_65_percent(packer_service, de
     assert set(response.boxes[0].package_ids) == {"c1", "c2"}
 
 
-def test_volumetric_derating_forces_multiple_boxes_in_largest_box(packer_service, default_catalogue):
+def test_volume_buffer_forces_multiple_boxes_in_largest_box(packer_service, default_catalogue):
     """
     Two 250x250x250 cubes:
     Combined volume = 31.25M.
@@ -385,7 +385,7 @@ def test_volumetric_derating_forces_multiple_boxes_in_largest_box(packer_service
         PackageInput(id="b1", width=250.0, height=250.0, length=250.0, weight=50.0),
         PackageInput(id="b2", width=250.0, height=250.0, length=250.0, weight=50.0),
     ]
-    response = packer_service.pack(packages, strategy=StrategyType.VOLUMETRIC_DERATING.value)
+    response = packer_service.pack(packages, strategy=StrategyType.VOLUME_BUFFER.value)
     verify_packing_invariants(response, packages, default_catalogue, check_spatial=False)
 
     assert response.total_boxes == 2

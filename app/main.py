@@ -61,7 +61,7 @@ async def health_check():
         "Accepts a list of packages with dimensions and weight. "
         "Returns the total number of boxes needed, the package IDs packed into each box, "
         "and any unpackable items that exceed all box capacities. "
-        "Optionally select a packing strategy: 'bounding_box' (default) or 'volumetric_derating'."
+        "Optionally select a packing strategy: 'bounding_box' (default) or 'volume_buffer'."
     ),
     tags=["Packing"],
 )
@@ -89,7 +89,7 @@ async def pack_packages(
         Query(
             description=(
                 "Packing validation strategy: 'bounding_box' (Method A: Cumulative Bounding Box, smallest first) "
-                "or 'volumetric_derating' (Method C: 100% single / 65% multi-item derating, largest first)."
+                "or 'volume_buffer' (Method C: 100% single / 65% multi-item buffer, largest first)."
             ),
         ),
     ] = StrategyType.BOUNDING_BOX,
