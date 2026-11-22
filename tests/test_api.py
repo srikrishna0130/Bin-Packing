@@ -182,8 +182,6 @@ def test_api_combined_packages_exceed_box_dimensions_despite_valid_volume():
     """
     Two packages of 250 x 250 x 250:
     Combined volume (31.25M) < Box C volume (36M).
-    Combined weight (200) < Box C weight (3000).
-    Each fits in Box C individually (250 <= 300, 250 <= 400).
     Combined: 250 + 250 = 500 > 400, cannot coexist in Box C.
     The API must return 2 boxes.
     """
@@ -196,3 +194,36 @@ def test_api_combined_packages_exceed_box_dimensions_despite_valid_volume():
     data = response.json()
     assert data["total_boxes"] == 2
     assert len(data["boxes"]) == 2
+
+
+# ============================================================================
+# Strategy Selection Query Parameter Tests
+# ============================================================================
+
+def test_api_strategy_selection_bounding_box():
+    """Explicitly selecting ?strategy=bounding_box works."""
+    payload = [
+        {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0},
+    ]
+    response = client.post("/pack?strategy=bounding_box", json=payload)
+    assert response.status_code == 200
+    assert response.json()["total_boxes"] == 1
+
+
+def test_api_strategy_selection_volumetric_derating():
+    """Explicitly selecting ?strategy=volumetric_derating works."""
+    payload = [
+        {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0},
+    ]
+    response = client.post("/pack?strategy=volumetric_derating", json=payload)
+    assert response.status_code == 200
+    assert response.json()["total_boxes"] == 1
+
+
+def test_api_strategy_invalid_returns_422():
+    """Supplying an unknown strategy returns 422 Unprocessable Entity."""
+    payload = [
+        {"id": 1, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0},
+    ]
+    response = client.post("/pack?strategy=non_existent_strategy", json=payload)
+    assert response.status_code == 422

@@ -1,5 +1,5 @@
 from typing import List, Annotated
-from fastapi import FastAPI, HTTPException, status, Body
+from fastapi import FastAPI, HTTPException, status, Body, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -10,6 +10,7 @@ from app.config import (
 )
 from app.models.package import PackageInput, PackingResponse
 from app.services.packer import BinPackerService
+from app.services.strategies import StrategyType
 
 app = FastAPI(
     title="Bin Packing Service",
@@ -59,7 +60,8 @@ async def health_check():
     description=(
         "Accepts a list of packages with dimensions and weight. "
         "Returns the total number of boxes needed, the package IDs packed into each box, "
-        "and any unpackable items that exceed all box capacities."
+        "and any unpackable items that exceed all box capacities. "
+        "Optionally select a packing strategy: 'bounding_box' (default) or 'volumetric_derating'."
     ),
     tags=["Packing"],
 )
@@ -82,6 +84,15 @@ async def pack_packages(
             },
         ),
     ],
+    strategy: Annotated[
+        StrategyType,
+        Query(
+            description=(
+                "Packing validation strategy: 'bounding_box' (Method A: Cumulative Bounding Box, smallest first) "
+                "or 'volumetric_derating' (Method C: 100% single / 65% multi-item derating, largest first)."
+            ),
+        ),
+    ] = StrategyType.BOUNDING_BOX,
 ) -> PackingResponse:
     # Check for duplicate package IDs to protect data integrity
     seen_ids = set()
@@ -97,4 +108,4 @@ async def pack_packages(
             detail=f"Duplicate package IDs found: {list(duplicates)}. Each package in a shipment must have a unique ID.",
         )
 
-    return packer_service.pack(packages)
+    return packer_service.pack(packages, strategy=strategy.value)

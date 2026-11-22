@@ -1,6 +1,7 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from app.models.box import BoxDefinition
 from app.models.package import PackageInput, PackedBox, UnpackablePackage, PackingResponse
+from app.services.strategies import PackingStrategy, BoundingBoxStrategy, get_packing_strategy
 
 
 class ActiveBox:
@@ -18,15 +19,9 @@ class ActiveBox:
     def total_volume(self) -> float:
         return sum(item.volume for item in self.items)
 
-    def can_fit_item(self, item: PackageInput) -> bool:
-        """Check if an item can be added to the current box without exceeding limits (naive check)."""
-        if self.total_weight + item.weight > self.box_def.max_weight:
-            return False
-        if self.total_volume + item.volume > self.box_def.volume:
-            return False
-        if not self.box_def.can_accommodate_dimensions(item.sorted_dimensions):
-            return False
-        return True
+    def can_fit_item(self, item: PackageInput, strategy: PackingStrategy) -> bool:
+        """Check if an item can be added to the current box using the chosen strategy."""
+        return strategy.can_fit_items(self.box_def, self.items + [item])
 
     def to_packed_box(self) -> PackedBox:
         return PackedBox(
@@ -40,26 +35,14 @@ class ActiveBox:
 
 
 class BinPackerService:
-    """Bin packing service using the baseline Progressive Upgrade heuristic (naive volume/weight check)."""
+    """Bin packing service using the Progressive Upgrade heuristic with pluggable PackingStrategy."""
 
-    def __init__(self, boxes: List[BoxDefinition]):
+    def __init__(self, boxes: List[BoxDefinition], default_strategy: Optional[PackingStrategy] = None):
         if not boxes:
             raise ValueError("Box catalogue must contain at least one box definition.")
         # Sort boxes by volume ascending, then max_weight ascending
         self.boxes = sorted(boxes, key=lambda b: (b.volume, b.max_weight))
-
-    def _can_box_hold_all(self, box_def: BoxDefinition, items: List[PackageInput]) -> bool:
-        """Check if all items together satisfy a box definition's weight, volume, and dimensions."""
-        total_weight = sum(item.weight for item in items)
-        if total_weight > box_def.max_weight:
-            return False
-        total_volume = sum(item.volume for item in items)
-        if total_volume > box_def.volume:
-            return False
-        for item in items:
-            if not box_def.can_accommodate_dimensions(item.sorted_dimensions):
-                return False
-        return True
+        self.default_strategy = default_strategy or BoundingBoxStrategy()
 
     def _find_smallest_box_for_item(self, item: PackageInput) -> Optional[BoxDefinition]:
         """Find the smallest box in the catalogue that can fit this single item."""
@@ -70,19 +53,23 @@ class BinPackerService:
                 return box_def
         return None
 
-    def pack(self, packages: List[PackageInput]) -> PackingResponse:
+    def pack(
+        self,
+        packages: List[PackageInput],
+        strategy: Optional[Union[PackingStrategy, str]] = None,
+    ) -> PackingResponse:
         """
-        Packs the given packages into shipping boxes using the Progressive Upgrade heuristic.
+        Packs the given packages into shipping boxes using the Progressive Upgrade heuristic
+        driven by the selected packing strategy (Method A: Bounding Box or Method C: Volumetric Derating).
+        """
+        active_strategy: PackingStrategy
+        if strategy is None:
+            active_strategy = self.default_strategy
+        elif isinstance(strategy, str):
+            active_strategy = get_packing_strategy(strategy)
+        else:
+            active_strategy = strategy
 
-        1. Identifies and segregates any unpackable packages (exceeding all available boxes).
-        2. Sorts packable packages descending by volume to maximize packing density.
-        3. Fills an active box:
-           - Tries to fit the next item into the current box.
-           - If full, attempts to swap/upgrade the active box to a larger box type.
-           - If even the largest box cannot fit the items together, finalizes the active box
-             and opens a new box (starting with the smallest possible size for the new item).
-        4. Returns the total boxes, the package IDs in each box, and any unpackable packages.
-        """
         packable: List[PackageInput] = []
         unpackable: List[UnpackablePackage] = []
 
@@ -109,8 +96,8 @@ class BinPackerService:
                 unpackable_packages=unpackable,
             )
 
-        # Step 2: Sort packable items descending by volume, then weight (First-Fit Decreasing heuristic)
-        packable.sort(key=lambda p: (p.volume, p.weight), reverse=True)
+        # Step 2: Order packable items according to the active strategy
+        packable = active_strategy.sort_packages(packable)
 
         packed_boxes: List[PackedBox] = []
         active_box: Optional[ActiveBox] = None
@@ -124,11 +111,11 @@ class BinPackerService:
                 active_box.items.append(pkg)
                 continue
 
-            # Try to fit in current active box
-            if active_box.can_fit_item(pkg):
+            # Try to fit in current active box using the active strategy
+            if active_box.can_fit_item(pkg, active_strategy):
                 active_box.items.append(pkg)
             else:
-                # Active box is full with current item. Try upgrading to a larger box!
+                # Active box cannot hold item. Try upgrading to a larger box!
                 candidate_items = active_box.items + [pkg]
                 upgraded = False
 
@@ -136,7 +123,7 @@ class BinPackerService:
                 for candidate_box in self.boxes:
                     if candidate_box.volume <= active_box.box_def.volume:
                         continue
-                    if self._can_box_hold_all(candidate_box, candidate_items):
+                    if active_strategy.can_fit_items(candidate_box, candidate_items):
                         # Upgrade to this larger box
                         active_box.box_def = candidate_box
                         active_box.items.append(pkg)

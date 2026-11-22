@@ -40,6 +40,11 @@ docker run -p 8000:8000 bin-packing-service
 
 Accepts a list of packages to pack into available shipping boxes.
 
+#### Strategy Selection (`?strategy=...`)
+The client can choose between two packing validation strategies via the `strategy` query parameter:
+* **`strategy=bounding_box` (Default - Method A):** Uses cumulative bounding box expansion $[W, H, L]$. Sorts packages in **ascending volume** (smallest first) so small items pack tightly without creating dead air.
+* **`strategy=volumetric_derating` (Method C):** Uses volumetric fill factor limits ($100\%$ for 1 item, $65\%$ for $\ge 2$ items). Sorts packages in **descending volume** (First-Fit Decreasing).
+
 #### Sensible Limits & Guardrails
 - **Batch Size:** Minimum 1 item, maximum 500 items per request (protects against payload exhaustion).
 - **Physical Values:** `width`, `height`, `length`, and `weight` must be strictly positive (`> 0`).
@@ -118,45 +123,43 @@ The catalogue is stored in [`app/data/boxes.json`](app/data/boxes.json) and load
 
 ---
 
-## 4. Packing Algorithm: Progressive Upgrade Heuristic
+## 4. Packing Algorithm: Progressive Upgrade with Strategy Pattern
 
 ### Why Not Brute Force?
 3D bin packing is NP-hard. Brute forcing exponential placement trees causes request timeouts and latency spikes. Instead, we use an intuitive, deterministic, and highly efficient $O(N \log N)$ heuristic that prioritizes minimizing box count while choosing the smallest feasible box.
 
-### The Algorithm Step-by-Step
-1. **Unpackable Segregation:**
-   - Check if each package fits into at least one box in the catalogue (weight $\le \text{maxWeight}$ and rotated dimensions $\le \text{box dimensions}$).
-   - Packages that fit in no box are immediately isolated into `unpackable_packages`.
-2. **First-Fit Decreasing Ordering:**
-   - Sort packable packages in **descending order of volume and weight**.
-   - Packing larger items first prevents awkward large items from being stranded at the end and forcing unnecessary additional boxes.
-3. **Active Box Life Cycle (Progressive Upgrade with 3D Spatial Feasibility):**
-   - For the first item, open the smallest box type capable of holding it.
-   - For each subsequent item:
-     - **3D Collision & Limit Check:** Using the Extreme Points / Corner placement heuristic, check if the item can physically coexist inside the box without 3D spatial overlap with existing items, and within weight and volume limits.
-     - **Upgrade / Swap:** If the current box cannot fit or physically collides with the new item, test whether **all items in the active box plus the new item** can fit together into a larger box type without collisions (e.g. swap B $\rightarrow$ A, or B/A $\rightarrow$ C).
-     - **Finalize:** If even the largest box (Box C) cannot hold them all together without collisions or exceeding capacity, seal the current active box, commit it to `boxes`, and start a fresh active box starting from the smallest box that fits the new item.
+### Pluggable Strategies
+
+We use the **Strategy Pattern** to separate packing validation into clean, interchangeable strategies:
+
+#### Method A: Cumulative Bounding Box (`bounding_box`, Default)
+* **Sorting:** Packages are sorted in **ascending order of volume** (smallest items first). This clusters small items tightly together and prevents premature inflation of bounding box dimensions.
+* **Fit Check:** Maintains a single enclosing bounding box $[W, H, L]$ by evaluating expansion along $X$, $Y$, and $Z$ across 3D rotations. If the minimal enclosing bounding box fits within the shipping box, the items fit.
+
+#### Method C: Volumetric Derating (`volumetric_derating`)
+* **Sorting:** Packages are sorted in **descending order of volume** (First-Fit Decreasing).
+* **Fit Check:** Enforces realistic packaging fill factors:
+  * Single item ($N=1$): Allows up to **$100\%$** ($1.0$) of box volume.
+  * Multiple items ($N \ge 2$): Caps volume at **$65\%$** ($0.65$) to account for void space between mixed rectangular items.
 
 ---
 
 ## 5. How Unit Testing Works: Invariants & Failure Cases
 
-Since minimal bin packing is a heuristic rather than a provably unique mathematical optimum, **how do we unit test it?**
-
-Rather than asserting arbitrary magic box numbers, unit testing verifies **physical, spatial, and logical invariants**:
+Since minimal bin packing is a heuristic rather than a provably unique mathematical optimum, unit testing verifies **physical, spatial, and logical invariants**:
 
 1. **Item Conservation:** Every packable input package ID must appear in **exactly one** returned box. No packages lost, none duplicated.
 2. **Unpackable Isolation:** Unpackable package IDs appear strictly in `unpackable_packages` and never in any packed box.
 3. **Weight Feasibility:** For every packed box, $\sum \text{weight} \le \text{box.max\_weight}$.
 4. **Volume Feasibility:** For every packed box, $\sum \text{volume} \le \text{box.volume}$.
 5. **Rotational 3D Dimension Feasibility:** For every package inside a box, its sorted 3D dimensions $(d_1 \le d_2 \le d_3) \le (b_1 \le b_2 \le b_3)$ of the assigned box.
-6. **3D Spatial Non-Collision:** Every box is verified through `can_pack_geometrically_3d` to confirm that items do not intersect or protrude in 3D space.
-7. **Box Count Integrity:** `total_boxes == len(boxes)`.
+6. **Box Count Integrity:** `total_boxes == len(boxes)`.
 
-### Tested Failure & Error Cases:
-- **Spatial Collision Forces Upgrade:** Two $110\times 110\times 110$ cubes have a combined volume under Box A's limit, but physically collide in Box A ($110+110=220 > 150$). The packer catches this collision and upgrades to Box C.
+### Tested Failure & Edge Cases:
+- **Spatial Collision Forces Upgrade:** Two $110\times 110\times 110$ cubes have a combined volume under Box A's limit, but physically collide in Box A ($110+110=220 > 150$). Both `bounding_box` and `volumetric_derating` catch this and upgrade to Box C.
 - **Spatial Collision in Largest Box Forces Multiple Boxes:** Two $250\times 250\times 250$ cubes have a combined volume under Box C's limit, but collide in Box C ($250+250=500 > 400$). The packer catches this failure and splits them into 2 separate Box C boxes.
 - **Incompatible Dimensions on Upgrade:** Package 1 fits only in Box B ($190\times 90\times 90$), Package 2 fits only in Box A ($140\times 140\times 140$). Upgrading to Box A fails because P1 exceeds A; upgrading to Box B fails because P2 exceeds B. The packer detects this and upgrades to Box C.
+- **Strategy Selection & Parameter Validation:** Explicit selection of `bounding_box` and `volumetric_derating` via query parameter, plus 422 error on invalid strategy names.
 - **Negative & Zero Dimensions / Weights:** Rejected with `422 Unprocessable Entity`.
 - **Missing Required Fields & Non-Numeric Types:** Rejected with `422 Unprocessable Entity`.
 - **Empty List `[]`:** Rejected with `422 Unprocessable Entity`.
