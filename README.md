@@ -170,14 +170,42 @@ Since minimal bin packing is a heuristic rather than a provably unique mathemati
 
 ## 6. Assumptions & Design Decisions
 
-1. **What "Fits" Means:** An item fits in a box if its rotated orthogonal dimensions $(d_1, d_2, d_3)$ fit inside the box $(b_1, b_2, b_3)$, and the cumulative volume and weight of all items do not exceed the box's volume and weight limits.
-2. **Partial Shipment (HTTP 200):** If unpackable packages are present, the API packs what it can and returns the rest in `unpackable_packages`.
-3. **Empty Input (`[]`):** Rejected with `422 Unprocessable Entity` because a shipment request must have at least 1 item.
-4. **Catalogue Extensibility:** Box types are loaded from `boxes.json`, making it easy to add or adjust box types without changing service code.
+Where the assignment specification was open or silent, the following deliberate decisions and assumptions were made:
+
+### A. What "Fits" Means & Geometric Constraints
+1. **Rigid Rectangles:** All packages and shipping boxes are assumed to be rigid rectangular cuboids (no compressible/deformable packaging).
+2. **Orthogonal 3D Rotation:** Packages can be freely rotated in 3D across any of the 6 orthogonal orientations unless a package has a "this side up" restriction (which the spec does not specify).
+3. **Multi-Item Spatial Coexistence:**
+   - **`bounding_box` (Method A):** Multiple items fit together if their combined minimal enclosing bounding box $[W, H, L]$ physically fits inside the box's outer dimensions, in addition to satisfying cumulative weight $\le \text{maxWeight}$ and volume $\le \text{box.volume}$.
+   - **`volume_buffer` (Method C):** A single item can use up to $100\%$ of a box's volume, while multiple items are capped at $65\%$ ($0.65$) to account for real-world packing void ratios and air gaps.
+
+### B. Package Ordering & Filling Heuristic
+4. **Smallest-First for Bounding Box:** In the `bounding_box` strategy, packages are sorted **ascending by volume (smallest first)**. This clusters small items tightly together first and prevents large items from causing premature dimension inflation ("dead air").
+5. **Largest-First for Volume Buffer:** In the `volume_buffer` strategy, packages are sorted **descending by volume (largest first)** following the classic First-Fit Decreasing heuristic.
+6. **Box Upgrade Priority:** Boxes are evaluated in ascending order of volume: **Box B ($2.0\text{M}$) $\rightarrow$ Box A ($3.375\text{M}$) $\rightarrow$ Box C ($36.0\text{M}$)**. We prioritize minimizing the total box count: if an active box overflows, we attempt to swap/upgrade it to a larger box (Box A or Box C) before sealing it and opening an additional box.
+
+### C. Error Handling & Partial Shipment Policy
+7. **Unpackable Items (Partial Shipment Approach):** If an individual package exceeds the physical dimensions or weight capacity of all available boxes (e.g., weight $> 3,000$ or dimensions $> [300, 300, 400]$), the API does not throw an unhandled 500 error. Instead, it fulfills what it can: it packs all valid packages into boxes, sets `total_boxes` accordingly, and returns an `unpackable_packages` array detailing the oversized/overweight items with clear explanatory reasons. If all packages in a request are unpackable, it returns `200 OK` with `total_boxes: 0`, `boxes: []`, and all items listed in `unpackable_packages`.
+8. **Empty Input (`[]`):** An empty list `[]` is rejected with `422 Unprocessable Entity` (`min_length=1`) on the assumption that a commercial shipping API requires at least one item to book a shipment.
+9. **Duplicate Package IDs:** Each package within a single shipment payload must have a unique identifier. Duplicates are rejected with `400 Bad Request` to preserve parcel tracking integrity.
+
+### D. System Guardrails & Non-Functional Decisions
+10. **Sensible Batch Limits:** Requests are capped at a maximum of $500$ packages (`max_length=500`) to guarantee deterministic millisecond response times and guard against payload exhaustion / DoS attacks.
+11. **Strict Positive Numbers & Sanity Bounds:** All physical dimensions and weights must be strictly positive (`> 0`). Dimensions are capped at $10,000$ and weights at $100,000$ to prevent integer/float overflow.
+12. **Configurable Box Catalogue:** The box catalogue is decoupled into [`app/data/boxes.json`](app/data/boxes.json) and loaded via Pydantic models, allowing warehouse operators or reviewers to adjust box dimensions or add new box sizes without modifying service code.
+13. **Stateless Service:** As stated in the take-home prompt's out-of-scope guidance, no external database or auth layer is required; the service is completely stateless and containerized.
 
 ---
 
-## 7. What to Do with More Time
-- **3D Guillotine / Shelf Placement:** Add 3D coordinate nesting for non-cubic irregular clusters.
-- **Multi-bin Best Fit:** Maintain multiple concurrently open bins to backfill small packages into earlier partially-filled boxes.
-- **Client SDK / OpenAPI generation:** Generate typed clients directly from the FastAPI schema.
+## 7. Trade-offs Considered
+
+* **Bounding Box vs. Full 3D Coordinate Meshing:** Bounding Box expansion offers $O(N)$ speed and zero external dependencies while preventing physical overlap. It is slightly more conservative on irregular L-shaped clusters than a full 3D physics engine, but runs in sub-millisecond time and is 100% deterministic.
+* **Volume Buffer vs. Pure Geometry:** `volume_buffer` offers instant calculation by applying an empirical $65\%$ packing factor. It is fast and predictable, while `bounding_box` is preferred when strict geometric boundaries are required.
+* **Progressive Upgrade vs. Global Multi-Bin Search:** Progressive box upgrading streams items one active box at a time, keeping memory minimal and the algorithm explainable, at the minor trade-off of not backtracking to re-open previously sealed boxes.
+
+---
+
+## 8. What to Do with More Time
+- **3D Coordinate Output:** Return explicit $(x, y, z)$ placement offsets for each package to power a 3D packing visualizer in warehouse packing stations.
+- **Backfilling Sealed Boxes:** Maintain a pool of partially filled sealed boxes and allow small remaining items to backfill residual volume before opening new boxes.
+- **Client SDK Generation:** Auto-generate typed Python / TypeScript API client libraries directly from the FastAPI OpenAPI schema.
