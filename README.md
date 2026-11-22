@@ -150,7 +150,7 @@ Since minimal bin packing is a heuristic rather than a provably unique mathemati
 
 1. **Item Conservation:** Every packable input package ID must appear in **exactly one** returned box. No packages lost, none duplicated.
 2. **Unpackable Isolation:** Unpackable package IDs appear strictly in `unpackable_packages` and never in any packed box.
-3. **Weight Feasibility:** For every packed box, $\sum \text{weight} \le \text{box.max\_weight}$.
+3. **Weight Feasibility:** For every packed box, $\sum \text{weight} \le \text{maxWeight}$.
 4. **Volume Feasibility:** For every packed box, $\sum \text{volume} \le \text{box.volume}$.
 5. **Rotational 3D Dimension Feasibility:** For every package inside a box, its sorted 3D dimensions $(d_1 \le d_2 \le d_3) \le (b_1 \le b_2 \le b_3)$ of the assigned box.
 6. **Box Count Integrity:** `total_boxes == len(boxes)`.
