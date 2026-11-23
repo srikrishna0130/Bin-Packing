@@ -3,6 +3,14 @@
 A production-ready FastAPI service that calculates the minimum number of shipping boxes needed for an inventory of packages, returning item-to-box assignments while respecting 3D dimensions, weight limits, and physical space constraints.
 
 ---
+## Demo
+
+
+https://github.com/user-attachments/assets/c312da4f-0b1f-4458-967b-1974a16454ba
+
+
+
+
 
 ## 1. System Architecture
 
