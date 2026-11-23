@@ -74,13 +74,39 @@ async def pack_packages(
             max_length=MAX_PACKAGES_PER_REQUEST,
             description="List of packages to be packed (1 to 500 items).",
             openapi_examples={
-                "assignment_example": {
-                    "summary": "Sample from assignment",
+                "assignment_sample": {
+                    "summary": "1. Baseline (Assignment Sample)",
+                    "description": "Two small packages that fit into a single Box B.",
                     "value": [
                         {"id": 123, "width": 10.0, "height": 10.0, "length": 10.0, "weight": 5.0},
                         {"id": 125, "width": 5.0, "height": 5.0, "length": 10.0, "weight": 10.0},
                     ],
-                }
+                },
+                "progressive_upgrade": {
+                    "summary": "2. Progressive Box Upgrade (B -> A)",
+                    "description": "Three 70x70x70 items. Two fit in Box B; the third exceeds Box B height and triggers an automatic swap/upgrade to Box A.",
+                    "value": [
+                        {"id": "pkg_1", "width": 70.0, "height": 70.0, "length": 70.0, "weight": 10.0},
+                        {"id": "pkg_2", "width": 70.0, "height": 70.0, "length": 70.0, "weight": 10.0},
+                        {"id": "pkg_3", "width": 70.0, "height": 70.0, "length": 70.0, "weight": 10.0},
+                    ],
+                },
+                "spatial_collision_upgrade": {
+                    "summary": "3. Spatial Collision Avoidance (A -> C)",
+                    "description": "Two 110x110x110 cubes. Total volume fits Box A, but 110+110=220 > 150. Detected and upgraded to Box C.",
+                    "value": [
+                        {"id": "cube_1", "width": 110.0, "height": 110.0, "length": 110.0, "weight": 20.0},
+                        {"id": "cube_2", "width": 110.0, "height": 110.0, "length": 110.0, "weight": 20.0},
+                    ],
+                },
+                "partial_shipment_unpackable": {
+                    "summary": "4. Partial Shipment with Unpackable Item",
+                    "description": "One standard package and one oversized package (exceeding all boxes), returning 200 OK with unpackable items itemized.",
+                    "value": [
+                        {"id": "standard_item", "width": 20.0, "height": 20.0, "length": 20.0, "weight": 15.0},
+                        {"id": "oversized_item", "width": 500.0, "height": 500.0, "length": 500.0, "weight": 3500.0},
+                    ],
+                },
             },
         ),
     ],
